@@ -2,8 +2,6 @@ import os
 import requests
 import random
 import logging
-import schedule
-import time
 from datetime import datetime
 
 # Logging setup
@@ -33,9 +31,10 @@ class HistoryFetcher:
             return []
 
         events = resp.json().get("events", [])
-        # Filter: only Africa / colonial / independence events
-        keywords = ["Africa", "Nigerian", "Ghana", "Kenya", "colonial", "independence",
-                    "Mandela", "Apartheid", "Pan-African", "Congo", "Ethiopia", "Sudan"]
+        keywords = [
+            "Africa", "Nigerian", "Ghana", "Kenya", "colonial", "independence",
+            "Mandela", "Apartheid", "Pan-African", "Congo", "Ethiopia", "Sudan"
+        ]
         filtered = [
             e for e in events
             if any(kw.lower() in (e.get("text", "") + str(e.get("pages", ""))).lower() for kw in keywords)
@@ -82,20 +81,19 @@ class FacebookBot:
 
 
 def make_post():
-    logging.info("📌 Starting new scheduled post...")
+    logging.info("📌 Starting new post...")
 
     events = HistoryFetcher.get_events()
     if not events:
         logging.warning("No African events found today.")
         return
 
-    event = random.choice(events)  # Pick 1 random event
+    event = random.choice(events)
     event_text = event.get("text", "An African history event.")
     logging.info(f"Selected event: {event_text}")
 
     post_text = ContentGenerator.generate_text(event_text)
 
-    # Always generate an image
     image_bytes = ContentGenerator.generate_image(event_text)
     if not image_bytes:
         logging.warning("Image generation failed, retrying once...")
@@ -107,18 +105,5 @@ def make_post():
         logging.error("❌ Skipping post because image could not be generated.")
 
 
-def main():
-    # Schedule 3 posts daily
-    schedule.every().day.at("09:00").do(make_post)
-    schedule.every().day.at("13:00").do(make_post)
-    schedule.every().day.at("18:00").do(make_post)
-
-    logging.info("🚀 Facebook History Bot started...")
-
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-
 if __name__ == "__main__":
-    main()
+    make_post()
