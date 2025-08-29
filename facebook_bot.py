@@ -9,10 +9,10 @@ from datetime import datetime
 # Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# === ENVIRONMENT VARIABLES ===
+# === ENVIRONMENT VARIABLES (your naming) ===
 HUGGINGFACE_API_KEY = os.getenv("HF_TOKEN")
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-PAGE_ID = os.getenv("PAGE_ID")
+PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
+PAGE_ID = os.getenv("FB_PAGE_ID")
 
 # === CONSTANTS ===
 WIKI_API = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events"
