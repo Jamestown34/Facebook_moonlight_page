@@ -1,32 +1,36 @@
-name: Facebook History Bot
+name: Daily Facebook Bot
 
 on:
   schedule:
-    - cron: '0 7,13,19 * * *'  # UTC: 07:00, 13:00, 19:00
-  workflow_dispatch:
+    # Runs every day at 9 AM UTC
+    - cron: '0 9 * * *'
+  workflow_dispatch: # allows manual triggering
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: 3.11
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests python-dotenv
+
+      - name: Set environment variables
+        run: |
+          echo "FB_PAGE_ACCESS_TOKEN=${{ secrets.FB_PAGE_ACCESS_TOKEN }}" >> $GITHUB_ENV
+          echo "FB_PAGE_ID=${{ secrets.FB_PAGE_ID }}" >> $GITHUB_ENV
+          echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> $GITHUB_ENV
+          echo "HF_TOKEN=${{ secrets.HF_TOKEN }}" >> $GITHUB_ENV
 
       - name: Run Facebook Bot
-        env:
-          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}
         run: |
           python facebook_bot.py
