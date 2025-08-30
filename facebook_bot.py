@@ -5,18 +5,17 @@ import datetime
 import hashlib
 import json
 import time
-import random
 
-# Logging
+# ====== LOGGING ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Env vars
+# ====== ENVIRONMENT VARIABLES ======
 FB_PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_ACCESS_TOKEN")
 FB_PAGE_ID = os.getenv("FB_PAGE_ID")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-REPLICATE_API_KEY = os.getenv("REPLICATE_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-POST_LOG = "post_log.json"   # keep track of what was posted today
+POST_LOG = "post_log.json"   # track posted content
 DAILY_POST_LIMIT = 3  # Number of posts per day
 
 # ====== HELPERS ======
@@ -69,7 +68,7 @@ def get_post_themes():
         "Pan-African movements and unity efforts"
     ]
 
-# ====== GROQ TEXT GENERATION ======
+# ====== TEXT GENERATION WITH GROQ ======
 def generate_text(post_number=1):
     today = datetime.date.today().strftime("%B %d, %Y")
     themes = get_post_themes()
@@ -97,56 +96,40 @@ def generate_text(post_number=1):
         logging.error(f"Error generating text: {e}")
         return None
 
-# ====== IMAGE GENERATION WITH REPLICATE ======
-def generate_image(prompt):
-    url = "https://api.replicate.com/v1/predictions"
-    headers = {"Authorization": f"Token {REPLICATE_API_KEY}", "Content-Type": "application/json"}
-    
-    image_prompt = f"Historical illustration of African colonial or post-colonial history: {prompt[:100]}, detailed artwork, educational style, warm colors"
-    
-    data = {
-        "version": "stability-ai/stable-diffusion:27b93a2413e7f36cd83da926f3656280b2931564ff050bf9575f1fdf9bcd7478",
-        "input": {
-            "prompt": image_prompt,
-            "image_dimensions": "512x512",
-            "num_outputs": 1,
-            "guidance_scale": 7.5,
-            "num_inference_steps": 20
+# ====== IMAGE GENERATION WITH HUGGING FACE ======
+HF_IMAGE_MODEL = "runwayml/stable-diffusion-v1-5"
+
+def generate_image_hf(prompt):
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {
+        "inputs": f"Historical illustration: {prompt}, detailed artwork, educational style, warm colors",
+        "options": {
+            "wait_for_model": True,
+            "width": 256,
+            "height": 256
         }
     }
-    
     try:
-        resp = requests.post(url, headers=headers, json=data)
+        resp = requests.post(f"https://api-inference.huggingface.co/models/{HF_IMAGE_MODEL}", headers=headers, json=payload)
         resp.raise_for_status()
-        prediction = resp.json()
-        prediction_url = prediction["urls"]["get"]
-
-        for _ in range(30):
-            result = requests.get(prediction_url, headers=headers)
-            result.raise_for_status()
-            result_data = result.json()
-            if result_data["status"] == "succeeded":
-                return result_data["output"][0] if result_data["output"] else None
-            elif result_data["status"] == "failed":
-                logging.error(f"Image generation failed: {result_data.get('error', 'Unknown error')}")
-                return None
-            time.sleep(3)
-        logging.warning("Image generation timed out")
-        return None
+        return resp.content  # raw image bytes
     except Exception as e:
-        logging.error(f"Error generating image: {e}")
+        logging.error(f"Error generating image (HF): {e}")
         return None
 
-# ====== FACEBOOK POST ======
-def post_to_facebook(message, image_url=None, post_number=1):
+# ====== FACEBOOK POSTING ======
+def post_to_facebook(message, image_bytes=None, post_number=1):
     try:
-        if image_url:
+        if image_bytes:
             fb_url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
-            payload = {"caption": message, "url": image_url, "access_token": FB_PAGE_ACCESS_TOKEN}
+            files = {"source": ("image.png", image_bytes, "image/png")}
+            payload = {"caption": message, "access_token": FB_PAGE_ACCESS_TOKEN}
+            r = requests.post(fb_url, data=payload, files=files)
         else:
             fb_url = f"https://graph.facebook.com/{FB_PAGE_ID}/feed"
             payload = {"message": message, "access_token": FB_PAGE_ACCESS_TOKEN}
-        r = requests.post(fb_url, data=payload)
+            r = requests.post(fb_url, data=payload)
+
         r.raise_for_status()
         result = r.json()
         if 'id' in result:
@@ -158,7 +141,7 @@ def post_to_facebook(message, image_url=None, post_number=1):
         logging.error(f"Error posting to Facebook (Post #{post_number}): {e}")
         return None
 
-# ====== DAILY POSTS ======
+# ====== DAILY POST CREATION ======
 def create_daily_posts():
     posts_today = count_posts_today()
     remaining_posts = DAILY_POST_LIMIT - posts_today
@@ -179,8 +162,9 @@ def create_daily_posts():
         if not text:
             logging.error(f"❌ Could not generate unique content for post #{post_num}")
             continue
-        image_url = generate_image(text[:120])
-        result = post_to_facebook(text, image_url, post_num)
+
+        image_bytes = generate_image_hf(text[:120])
+        result = post_to_facebook(text, image_bytes, post_num)
         if result:
             mark_posted(text, post_num)
             logging.info(f"✅ Post #{post_num} completed successfully!")
@@ -200,7 +184,7 @@ def show_status():
 
 # ====== MAIN ======
 if __name__ == "__main__":
-    required_vars = ["FB_PAGE_ACCESS_TOKEN", "FB_PAGE_ID", "GROQ_API_KEY", "REPLICATE_API_KEY"]
+    required_vars = ["FB_PAGE_ACCESS_TOKEN", "FB_PAGE_ID", "GROQ_API_KEY", "HF_TOKEN"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
         logging.error(f"❌ Missing env vars: {', '.join(missing_vars)}")
