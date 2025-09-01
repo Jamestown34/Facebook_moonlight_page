@@ -71,7 +71,6 @@ def get_post_themes():
 
 # ====== TEXT GENERATION WITH GROQ ======
 def generate_text(post_number=1):
-    today = datetime.date.today().strftime("%B %d, %Y")
     themes = get_post_themes()
     selected_theme = themes[(post_number - 1) % len(themes)]
     
@@ -104,7 +103,7 @@ Structure the text in clear paragraphs for readability and include 2 relevant ha
         return None
 
 # ====== IMAGE GENERATION WITH HUGGING FACE ======
-HF_IMAGE_MODEL = "runwayml/stable-diffusion-v1-5"
+HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 
 def generate_image_hf(prompt):
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
