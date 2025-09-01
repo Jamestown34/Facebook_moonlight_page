@@ -2,8 +2,8 @@ name: Daily Facebook Bot
 
 on:
   schedule:
-    # Runs every day at 9 AM UTC
-    - cron: '0 9 * * *'
+    # Runs at 07:00, 13:00, and 19:00 UTC daily
+    - cron: '0 7,13,19 * * *'
   workflow_dispatch: # allows manual triggering
 
 jobs:
@@ -22,8 +22,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv
-
+          pip install -r requirements.txt
+      
       - name: Set environment variables
         run: |
           echo "FB_PAGE_ACCESS_TOKEN=${{ secrets.FB_PAGE_ACCESS_TOKEN }}" >> $GITHUB_ENV
