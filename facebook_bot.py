@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 import re
+import schedule
 
 # ====== LOGGING ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -17,7 +18,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 POST_LOG = "post_log.json"   # track posted content
-DAILY_POST_LIMIT = 3  # Number of posts per day
+DAILY_POST_LIMIT = 3         # Number of posts per day
+POST_TIMES = ["07:00", "13:00", "19:00"]  # Scheduled posting times
 
 # ====== HELPERS ======
 def load_log():
@@ -104,6 +106,8 @@ Structure the text in clear paragraphs for readability and include 2 relevant ha
 
 # ====== IMAGE GENERATION WITH HUGGING FACE ======
 HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+IMAGE_WIDTH = 256   # Smaller image width
+IMAGE_HEIGHT = 256  # Smaller image height
 
 def generate_image_hf(prompt):
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -111,8 +115,8 @@ def generate_image_hf(prompt):
         "inputs": f"Historical illustration: {prompt}, detailed artwork, educational style, warm colors",
         "options": {
             "wait_for_model": True,
-            "width": 256,
-            "height": 256
+            "width": IMAGE_WIDTH,
+            "height": IMAGE_HEIGHT
         }
     }
     try:
@@ -147,37 +151,44 @@ def post_to_facebook(message, image_bytes=None, post_number=1):
         logging.error(f"Error posting to Facebook (Post #{post_number}): {e}")
         return None
 
-# ====== DAILY POST CREATION WITH PARAGRAPHS AND CTA ======
-def create_daily_posts():
+# ====== POST CREATION FUNCTION ======
+def create_single_post(post_number):
+    logging.info(f"\n🔄 Working on scheduled post #{post_number}...")
+    text = None
+    for attempt in range(5):
+        candidate_text = generate_text(post_number)
+        if candidate_text and not already_posted(candidate_text):
+            sentences = candidate_text.split(". ")
+            text = "\n\n".join([s.strip() for s in sentences if s.strip()])
+            text += "\n\nDrop your thoughts in the comments and follow us for more historical insights!"
+            break
+        time.sleep(1)
+    if not text:
+        logging.error(f"❌ Could not generate unique content for post #{post_number}")
+        return
+
+    image_bytes = generate_image_hf(text[:120])
+    result = post_to_facebook(text, image_bytes, post_number)
+    if result:
+        mark_posted(text, post_number)
+        logging.info(f"✅ Scheduled post #{post_number} completed successfully!")
+
+# ====== SCHEDULING POSTS ======
+def schedule_posts():
     posts_today = count_posts_today()
     remaining_posts = DAILY_POST_LIMIT - posts_today
     if remaining_posts <= 0:
         logging.info(f"✅ Already posted {DAILY_POST_LIMIT} times today.")
         return
-    logging.info(f"📝 Creating {remaining_posts} post(s) for today...")
 
-    for post_num in range(posts_today + 1, DAILY_POST_LIMIT + 1):
-        logging.info(f"\n🔄 Working on post #{post_num}...")
-        text = None
-        for attempt in range(5):
-            candidate_text = generate_text(post_num)
-            if candidate_text and not already_posted(candidate_text):
-                # Split into paragraphs for readability
-                sentences = candidate_text.split(". ")
-                text = "\n\n".join([s.strip() for s in sentences if s.strip()])
-                # Append CTA
-                text += "\n\nDrop your thoughts in the comments and follow us for more historical insights!"
-                break
-            time.sleep(1)
-        if not text:
-            logging.error(f"❌ Could not generate unique content for post #{post_num}")
-            continue
+    for i, post_time in enumerate(POST_TIMES[:remaining_posts], 1):
+        schedule.every().day.at(post_time).do(create_single_post, post_number=posts_today + i)
+        logging.info(f"⏰ Scheduled post #{posts_today + i} for {post_time}")
 
-        image_bytes = generate_image_hf(text[:120])
-        result = post_to_facebook(text, image_bytes, post_num)
-        if result:
-            mark_posted(text, post_num)
-            logging.info(f"✅ Post #{post_num} completed successfully!")
+    logging.info("🕒 Bot is now running and waiting for scheduled post times...")
+    while True:
+        schedule.run_pending()
+        time.sleep(10)  # check every 10 seconds
 
 # ====== STATUS ======
 def show_status():
@@ -199,5 +210,6 @@ if __name__ == "__main__":
     if missing_vars:
         logging.error(f"❌ Missing env vars: {', '.join(missing_vars)}")
         exit(1)
+
     show_status()
-    create_daily_posts()
+    schedule_posts()
