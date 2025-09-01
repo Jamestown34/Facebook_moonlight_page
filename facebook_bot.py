@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import json
 import time
+import re
 
 # ====== LOGGING ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -74,7 +75,9 @@ def generate_text(post_number=1):
     themes = get_post_themes()
     selected_theme = themes[(post_number - 1) % len(themes)]
     
-    prompt = f"Write a unique, engaging Facebook post (max 120 words) about African {selected_theme} that happened on {today}. Focus on historical events, lesser-known but important stories, and include 2 relevant hashtags."
+    prompt = f"""Write a unique, engaging Facebook post (max 120 words) about African {selected_theme} that happened historically. 
+Do NOT include any disclaimers about future dates or uncertainties. 
+Structure the text in clear paragraphs for readability and include 2 relevant hashtags."""
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -91,7 +94,11 @@ def generate_text(post_number=1):
     try:
         resp = requests.post(url, headers=headers, json=data)
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        content = resp.json()["choices"][0]["message"]["content"]
+
+        # Remove AI disclaimers
+        content = re.sub(r"(I think there may be a mistake.*?See more)", "", content, flags=re.DOTALL)
+        return content.strip()
     except Exception as e:
         logging.error(f"Error generating text: {e}")
         return None
@@ -141,7 +148,7 @@ def post_to_facebook(message, image_bytes=None, post_number=1):
         logging.error(f"Error posting to Facebook (Post #{post_number}): {e}")
         return None
 
-# ====== DAILY POST CREATION ======
+# ====== DAILY POST CREATION WITH PARAGRAPHS AND CTA ======
 def create_daily_posts():
     posts_today = count_posts_today()
     remaining_posts = DAILY_POST_LIMIT - posts_today
@@ -156,7 +163,11 @@ def create_daily_posts():
         for attempt in range(5):
             candidate_text = generate_text(post_num)
             if candidate_text and not already_posted(candidate_text):
-                text = candidate_text
+                # Split into paragraphs for readability
+                sentences = candidate_text.split(". ")
+                text = "\n\n".join([s.strip() for s in sentences if s.strip()])
+                # Append CTA
+                text += "\n\nDrop your thoughts in the comments and follow us for more historical insights!"
                 break
             time.sleep(1)
         if not text:
