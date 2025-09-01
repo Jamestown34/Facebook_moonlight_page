@@ -1,1 +1,4 @@
 requests
+requests-oauthlib
+schedule==1.2.1
+groq
