@@ -25,7 +25,7 @@ IMAGE_WIDTH = 512
 IMAGE_HEIGHT = 512
 
 # ====== GOOGLE SHEETS SETUP ======
-SHEET_ID = "YOUR_GOOGLE_SHEET_ID"  # replace with your sheet ID
+SHEET_ID = "1NvNUmFQ_p5rf5uoTnwywtsYFDuKcTZFx0kE66msLsmE"  # replace with your sheet ID
 SHEET_NAME = "FB_Bot_Memory"
 
 creds_dict = json.loads(GOOGLE_CREDS_JSON)
