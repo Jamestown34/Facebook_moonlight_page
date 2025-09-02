@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 import re
+import random
 import schedule
 
 # ====== LOGGING ======
@@ -20,6 +21,10 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 POST_LOG = "post_log.json"   # track posted content
 DAILY_POST_LIMIT = 3         # Number of posts per day
 POST_TIMES = ["07:00", "13:00", "19:00"]  # Scheduled posting times
+
+HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+IMAGE_WIDTH = 512
+IMAGE_HEIGHT = 512
 
 # ====== HELPERS ======
 def load_log():
@@ -59,72 +64,97 @@ def count_posts_today():
     data = load_log()
     return len(data.get(today, []))
 
+# ====== TOPICS & STYLES ======
 def get_post_themes():
     return [
-        "independence movements and freedom fighters",
-        "colonial resistance and liberation struggles", 
-        "post-independence achievements and challenges",
-        "cultural preservation during colonial period",
-        "economic developments and trade history",
-        "educational and intellectual movements",
-        "women's roles in African history",
-        "Pan-African movements and unity efforts"
+        "African fashion trends and designers",
+        "African innovations and technology breakthroughs",
+        "Stories of everyday life in different African countries",
+        "Economic developments and trade history",
+        "Modern African leaders and diplomacy",
+        "African cuisine and traditional recipes",
+        "Educational and intellectual movements",
+        "African sports achievements and history",
+        "Cultural preservation during colonial period",
+        "African languages and linguistic diversity",
+        "Travel and tourism destinations in Africa",
+        "Notable African scientists and inventors",
+        "Women’s roles in African history",
+        "Environmental conservation in Africa",
+        "Festivals, rituals, and cultural celebrations",
+        "Health initiatives and medical breakthroughs",
+        "Community projects and social impact initiatives",
+        "Emerging African entrepreneurs and startups",
+        "Post-independence achievements and challenges",
+        "Tech hubs and innovation centers across Africa",
+        "African art, music, and literature",
+        "African wildlife and national parks"
+    ]
+
+def get_post_styles():
+    return [
+        "Share an inspiring story about {topic} that everyone can learn from.",
+        "Highlight the historical significance of {topic}.",
+        "Explain {topic} in a way that educates and engages readers.",
+        "Tell a little-known fact about {topic}.",
+        "Discuss how {topic} shaped African history and culture.",
+        "Celebrate achievements in {topic} and their lasting impact.",
+        "Provide an interesting anecdote about {topic}.",
+        "Showcase the people behind {topic} and their contributions.",
+        "Explain {topic} in a practical context for readers today."
     ]
 
 # ====== TEXT GENERATION WITH GROQ ======
 def generate_text(post_number=1):
     themes = get_post_themes()
     selected_theme = themes[(post_number - 1) % len(themes)]
-    
-    prompt = f"""Write a unique, engaging Facebook post (max 120 words) about African {selected_theme} that happened historically. 
-Do NOT include any disclaimers about future dates or uncertainties. 
-Structure the text in clear paragraphs for readability and include 2 relevant hashtags."""
-    
+    styles = get_post_styles()
+    selected_style = random.choice(styles).format(topic=selected_theme)
+
+    prompt = (
+        f"Write a unique, engaging Facebook post (max 120 words) about African {selected_theme}. "
+        f"{selected_style} "
+        f"Do NOT include any disclaimers about future dates or uncertainties. "
+        f"Structure the text in clear paragraphs and include 2 relevant hashtags."
+    )
+
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     data = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "model": "llama3-8b-8192",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 300,
-        "temperature": 0.7
+        "temperature": 0.7,
+        "top_p": 0.9
     }
 
     try:
         resp = requests.post(url, headers=headers, json=data)
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-
-        # Remove AI disclaimers
         content = re.sub(r"(I think there may be a mistake.*?See more)", "", content, flags=re.DOTALL)
-        return content.strip()
+        return content.strip(), selected_theme, selected_style
     except Exception as e:
         logging.error(f"Error generating text: {e}")
-        return None
+        return None, selected_theme, selected_style
 
 # ====== IMAGE GENERATION WITH HUGGING FACE ======
-HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
-IMAGE_WIDTH = 256   # Smaller image width
-IMAGE_HEIGHT = 256  # Smaller image height
-
-def generate_image_hf(prompt):
+def generate_image_hf(text_snippet, topic, style):
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    prompt = (
+        f"Realistic historical illustration of African {topic}, inspired by '{style}', "
+        f"high detail, cinematic lighting, photo-realistic, educational style"
+    )
     payload = {
-        "inputs": f"Historical illustration: {prompt}, detailed artwork, educational style, warm colors",
-        "options": {
-            "wait_for_model": True,
-            "width": IMAGE_WIDTH,
-            "height": IMAGE_HEIGHT
-        }
+        "inputs": prompt,
+        "options": {"wait_for_model": True, "width": IMAGE_WIDTH, "height": IMAGE_HEIGHT}
     }
     try:
         resp = requests.post(f"https://api-inference.huggingface.co/models/{HF_IMAGE_MODEL}", headers=headers, json=payload)
         resp.raise_for_status()
-        return resp.content  # raw image bytes
+        return resp.content
     except Exception as e:
-        logging.error(f"Error generating image (HF): {e}")
+        logging.error(f"Error generating image: {e}")
         return None
 
 # ====== FACEBOOK POSTING ======
@@ -154,20 +184,22 @@ def post_to_facebook(message, image_bytes=None, post_number=1):
 # ====== POST CREATION FUNCTION ======
 def create_single_post(post_number):
     logging.info(f"\n🔄 Working on scheduled post #{post_number}...")
-    text = None
+    text, topic, style = None, None, None
+
     for attempt in range(5):
-        candidate_text = generate_text(post_number)
+        candidate_text, topic, style = generate_text(post_number)
         if candidate_text and not already_posted(candidate_text):
             sentences = candidate_text.split(". ")
             text = "\n\n".join([s.strip() for s in sentences if s.strip()])
             text += "\n\nDrop your thoughts in the comments and follow us for more historical insights!"
             break
         time.sleep(1)
+
     if not text:
         logging.error(f"❌ Could not generate unique content for post #{post_number}")
         return
 
-    image_bytes = generate_image_hf(text[:120])
+    image_bytes = generate_image_hf(text[:120], topic, style)
     result = post_to_facebook(text, image_bytes, post_number)
     if result:
         mark_posted(text, post_number)
@@ -188,7 +220,7 @@ def schedule_posts():
     logging.info("🕒 Bot is now running and waiting for scheduled post times...")
     while True:
         schedule.run_pending()
-        time.sleep(10)  # check every 10 seconds
+        time.sleep(10)
 
 # ====== STATUS ======
 def show_status():
