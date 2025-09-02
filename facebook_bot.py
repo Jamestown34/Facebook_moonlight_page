@@ -7,7 +7,6 @@ import json
 import time
 import re
 import random
-import schedule
 
 # ====== LOGGING ======
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -19,9 +18,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 POST_LOG = "post_log.json"   # track posted content
-DAILY_POST_LIMIT = 3         # Number of posts per day
-POST_TIMES = ["07:00", "13:00", "19:00"]  # Scheduled posting times
-
 HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 IMAGE_WIDTH = 512
 IMAGE_HEIGHT = 512
@@ -45,7 +41,7 @@ def already_posted(message):
         return True
     return False
 
-def mark_posted(message, post_number):
+def mark_posted(message):
     today = str(datetime.date.today())
     data = load_log()
     post_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()
@@ -53,16 +49,10 @@ def mark_posted(message, post_number):
         data[today] = []
     data[today].append({
         "hash": post_hash,
-        "post_number": post_number,
         "timestamp": datetime.datetime.now().isoformat(),
         "preview": message[:100] + "..." if len(message) > 100 else message
     })
     save_log(data)
-
-def count_posts_today():
-    today = str(datetime.date.today())
-    data = load_log()
-    return len(data.get(today, []))
 
 # ====== TOPICS & STYLES ======
 def get_post_themes():
@@ -105,9 +95,9 @@ def get_post_styles():
     ]
 
 # ====== TEXT GENERATION WITH GROQ ======
-def generate_text(post_number=1):
+def generate_text():
     themes = get_post_themes()
-    selected_theme = themes[(post_number - 1) % len(themes)]
+    selected_theme = random.choice(themes)
     styles = get_post_styles()
     selected_style = random.choice(styles).format(topic=selected_theme)
 
@@ -139,7 +129,7 @@ def generate_text(post_number=1):
         return None, selected_theme, selected_style
 
 # ====== IMAGE GENERATION WITH HUGGING FACE ======
-def generate_image_hf(text_snippet, topic, style):
+def generate_image_hf(topic, style):
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     prompt = (
         f"Realistic historical illustration of African {topic}, inspired by '{style}', "
@@ -158,7 +148,7 @@ def generate_image_hf(text_snippet, topic, style):
         return None
 
 # ====== FACEBOOK POSTING ======
-def post_to_facebook(message, image_bytes=None, post_number=1):
+def post_to_facebook(message, image_bytes=None):
     try:
         if image_bytes:
             fb_url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
@@ -173,69 +163,32 @@ def post_to_facebook(message, image_bytes=None, post_number=1):
         r.raise_for_status()
         result = r.json()
         if 'id' in result:
-            logging.info(f"✅ Post #{post_number} successful! FB Post ID: {result['id']}")
+            logging.info(f"✅ Post successful! FB Post ID: {result['id']}")
             return result
-        logging.error(f"❌ Post #{post_number} failed: {result}")
+        logging.error(f"❌ Post failed: {result}")
         return None
     except Exception as e:
-        logging.error(f"Error posting to Facebook (Post #{post_number}): {e}")
+        logging.error(f"Error posting to Facebook: {e}")
         return None
 
-# ====== POST CREATION FUNCTION ======
-def create_single_post(post_number):
-    logging.info(f"\n🔄 Working on scheduled post #{post_number}...")
-    text, topic, style = None, None, None
-
-    for attempt in range(5):
-        candidate_text, topic, style = generate_text(post_number)
-        if candidate_text and not already_posted(candidate_text):
-            sentences = candidate_text.split(". ")
-            text = "\n\n".join([s.strip() for s in sentences if s.strip()])
-            text += "\n\nDrop your thoughts in the comments and follow us for more historical insights!"
-            break
-        time.sleep(1)
-
+# ====== MAIN POST FUNCTION ======
+def main():
+    logging.info("➡️ Generating Facebook post...")
+    text, topic, style = generate_text()
     if not text:
-        logging.error(f"❌ Could not generate unique content for post #{post_number}")
+        logging.error("❌ Failed to generate post content.")
         return
 
-    image_bytes = generate_image_hf(text[:120], topic, style)
-    result = post_to_facebook(text, image_bytes, post_number)
-    if result:
-        mark_posted(text, post_number)
-        logging.info(f"✅ Scheduled post #{post_number} completed successfully!")
-
-# ====== SCHEDULING POSTS ======
-def schedule_posts():
-    posts_today = count_posts_today()
-    remaining_posts = DAILY_POST_LIMIT - posts_today
-    if remaining_posts <= 0:
-        logging.info(f"✅ Already posted {DAILY_POST_LIMIT} times today.")
+    if already_posted(text):
+        logging.warning("⚠️ This post has already been made today. Exiting.")
         return
 
-    for i, post_time in enumerate(POST_TIMES[:remaining_posts], 1):
-        schedule.every().day.at(post_time).do(create_single_post, post_number=posts_today + i)
-        logging.info(f"⏰ Scheduled post #{posts_today + i} for {post_time}")
+    image_bytes = generate_image_hf(topic, style)
+    post_to_facebook(text, image_bytes)
+    mark_posted(text)
+    logging.info("✅ Facebook post completed successfully!")
 
-    logging.info("🕒 Bot is now running and waiting for scheduled post times...")
-    while True:
-        schedule.run_pending()
-        time.sleep(10)
-
-# ====== STATUS ======
-def show_status():
-    today = str(datetime.date.today())
-    posts_today = count_posts_today()
-    data = load_log()
-    print(f"\n📊 DAILY STATUS FOR {today}")
-    print(f"Posts made today: {posts_today}/{DAILY_POST_LIMIT}")
-    if today in data:
-        for i, post in enumerate(data[today], 1):
-            timestamp = post.get('timestamp', 'Unknown')
-            preview = post.get('preview', 'No preview')
-            print(f"{i}. {timestamp[:19]} - {preview}")
-
-# ====== MAIN ======
+# ====== ENTRY POINT ======
 if __name__ == "__main__":
     required_vars = ["FB_PAGE_ACCESS_TOKEN", "FB_PAGE_ID", "GROQ_API_KEY", "HF_TOKEN"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -243,5 +196,4 @@ if __name__ == "__main__":
         logging.error(f"❌ Missing env vars: {', '.join(missing_vars)}")
         exit(1)
 
-    show_status()
-    schedule_posts()
+    main()
