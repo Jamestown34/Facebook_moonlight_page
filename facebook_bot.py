@@ -2,12 +2,11 @@ import os
 import requests
 import logging
 import datetime
-import hashlib
 import json
-import time
-import re
 import random
+import re
 import gspread
+from dateutil import parser
 from google.oauth2.service_account import Credentials
 
 # ====== LOGGING ======
@@ -20,9 +19,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HF_TOKEN = os.getenv("HF_TOKEN")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 SHEET_ID = "1NvNUmFQ_p5rf5uoTnwywtsYFDuKcTZFx0kE66msLsmE"
-SHEET_RANGE = "FB_Bot_Memory!A:E"
 
-POST_LOG = "post_log.json"
 DAILY_POST_LIMIT = 3
 HF_IMAGE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 IMAGE_WIDTH = 512
@@ -31,53 +28,24 @@ IMAGE_HEIGHT = 512
 # ====== GOOGLE SHEETS SETUP ======
 def get_sheet():
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=[
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ])
+    creds = Credentials.from_service_account_info(
+        creds_dict,
+        scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    )
     client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).worksheet("FB_Bot_Memory")
-    return sheet
+    return client.open_by_key(SHEET_ID).worksheet("FB_Bot_Memory")
 
-# ====== HELPERS ======
-def load_log():
-    if os.path.exists(POST_LOG):
-        with open(POST_LOG, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_log(data):
-    with open(POST_LOG, "w") as f:
-        json.dump(data, f, indent=2)
-
-def already_posted(message):
-    today = str(datetime.date.today())
-    data = load_log()
-    post_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()
-    return today in data and any(p["hash"] == post_hash for p in data[today])
-
+# ====== SHEET LOGGING ======
 def mark_posted(message, post_number, topic, fb_post_id=None):
-    today = str(datetime.date.today())
-    data = load_log()
-    post_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()
-    if today not in data:
-        data[today] = []
-    data[today].append({
-        "hash": post_hash,
-        "post_number": post_number,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "preview": message[:100] + "..." if len(message) > 100 else message
-    })
-    save_log(data)
-
-    # Also write to Google Sheets
+    today = datetime.date.today().isoformat()
     sheet = get_sheet()
     sheet.append_row([today, topic, message, post_number, fb_post_id or ""])
 
 def count_posts_today():
-    today = str(datetime.date.today())
-    data = load_log()
-    return len(data.get(today, []))
+    sheet = get_sheet()
+    today = datetime.date.today().isoformat()
+    rows = sheet.get_all_values()[1:]  # skip header
+    return sum(1 for row in rows if row and row[0] == today)
 
 # ====== TOPICS & STYLES ======
 def get_post_themes():
@@ -120,14 +88,12 @@ def get_post_styles():
     ]
 
 # ====== TEXT GENERATION ======
-def generate_text(post_number=1):
-    themes = get_post_themes()
-    selected_theme = themes[(post_number - 1) % len(themes)]
+def generate_text(topic, post_number=1):
     styles = get_post_styles()
-    selected_style = random.choice(styles).format(topic=selected_theme)
+    selected_style = random.choice(styles).format(topic=topic)
 
     prompt = (
-        f"Write a unique, engaging Facebook post (max 120 words) about African {selected_theme}. "
+        f"Write a unique, engaging Facebook post (max 120 words) about {topic}. "
         f"{selected_style} "
         f"Do NOT include any disclaimers about future dates or uncertainties. "
         f"Structure the text in clear paragraphs and include 2 relevant hashtags."
@@ -148,21 +114,25 @@ def generate_text(post_number=1):
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         content = re.sub(r"(I think there may be a mistake.*?See more)", "", content, flags=re.DOTALL)
-        return content.strip(), selected_theme, selected_style
+        return content.strip(), topic, selected_style
     except Exception as e:
         logging.error(f"Error generating text: {e}")
-        return None, selected_theme, selected_style
+        return None, topic, selected_style
 
 # ====== IMAGE GENERATION ======
 def generate_image_hf(topic, style):
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     prompt = (
-        f"Realistic historical illustration of African {topic}, inspired by '{style}', "
+        f"Realistic historical illustration of {topic}, inspired by '{style}', "
         f"high detail, cinematic lighting, photo-realistic, educational style"
     )
     payload = {"inputs": prompt, "options": {"wait_for_model": True, "width": IMAGE_WIDTH, "height": IMAGE_HEIGHT}}
     try:
-        resp = requests.post(f"https://api-inference.huggingface.co/models/{HF_IMAGE_MODEL}", headers=headers, json=payload)
+        resp = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_IMAGE_MODEL}",
+            headers=headers,
+            json=payload
+        )
         resp.raise_for_status()
         return resp.content
     except Exception as e:
@@ -184,25 +154,29 @@ def post_to_facebook(message, image_bytes=None):
 
         r.raise_for_status()
         result = r.json()
-        if 'id' in result:
+        if "id" in result:
             logging.info(f"✅ Post successful! FB Post ID: {result['id']}")
-            return result['id']
+            return result["id"]
         logging.error(f"❌ Post failed: {result}")
         return None
     except Exception as e:
         logging.error(f"Error posting to Facebook: {e}")
         return None
 
-# ====== CHECK LAST 2 DAYS TOPICS ======
+# ====== CHECK RECENT TOPICS ======
 def already_posted_topic(topic):
     sheet = get_sheet()
-    rows = sheet.get_all_values()
+    rows = sheet.get_all_values()[1:]  # skip header
     today = datetime.date.today()
     two_days_ago = today - datetime.timedelta(days=2)
+
     for row in rows:
         if len(row) < 2:
             continue
-        post_date = datetime.datetime.strptime(row[0], "%Y-%m-%d").date()
+        try:
+            post_date = parser.parse(row[0]).date()
+        except Exception:
+            continue
         posted_topic = row[1]
         if post_date >= two_days_ago and posted_topic == topic:
             return True
@@ -214,9 +188,9 @@ def pick_topic_for_today():
     for t in themes:
         if not already_posted_topic(t):
             return t
-    return random.choice(themes)  # fallback if all were used
+    return random.choice(themes)  # fallback
 
-# ====== MAIN POST CREATION ======
+# ====== MAIN LOOP ======
 if __name__ == "__main__":
     required_vars = ["FB_PAGE_ACCESS_TOKEN", "FB_PAGE_ID", "GROQ_API_KEY", "HF_TOKEN", "GOOGLE_CREDS_JSON"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -231,7 +205,7 @@ if __name__ == "__main__":
 
     for post_number in range(posts_today + 1, DAILY_POST_LIMIT + 1):
         topic = pick_topic_for_today()
-        text, _, style = generate_text(post_number)
+        text, topic, style = generate_text(topic, post_number)
         if text:
             image_bytes = generate_image_hf(topic, style)
             fb_post_id = post_to_facebook(text, image_bytes)
